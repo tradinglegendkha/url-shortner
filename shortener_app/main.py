@@ -9,9 +9,6 @@ from .config import get_settings
 app = FastAPI()
 models.Base.metadata.create_all(bind=engine)
 
-def raise_not_found(request):
-    message = f"URL '{request.url}' doesn't exist"
-    raise HTTPException(status_code=404, detail=message)
 
 def get_db():
     db = SessionLocal()
@@ -19,6 +16,14 @@ def get_db():
         yield db 
     finally:
         db.close()
+
+@app.get("/")
+def read_root():
+    return "Welcome to the URL shortener API"
+
+def raise_not_found(request):
+    message = f"URL '{request.url}' doesn't exist"
+    raise HTTPException(status_code=404, detail=message)
 
 @app.post("/url", response_model=schemas.URLInfo)
 def create_url(url: schemas.URLBase, db: Session = Depends(get_db)):
@@ -32,10 +37,7 @@ def create_url(url: schemas.URLBase, db: Session = Depends(get_db)):
         target_url = url.target_url, key=key, secret_key=secret_key
     )"""
     db_url = crud.create_db_url(db=db, url=url)
-    db_url.url = db_url.key
-    db_url.admin_url = db_url.secret_key
-
-    return db_url
+    return get_admin_info(db_url)
 
 
 @app.get("/{url_key}")
@@ -45,10 +47,11 @@ def forward_to_target_url (
         db: Session = Depends(get_db)
     ):
     if db_url:= crud.get_db_url_by_key(db=db, url_key=url_key):
-        return RedirectResponse(db_url.target_url)
+        crud.update_db_clicks(db=db, db_url=db_url)
+        return get_admin_info(db_url)
     else:
         raise_not_found(request)
-
+#part of CRUD admin key
 @app.get (
     "/admin.{secret_key}",
     name="administration info",
@@ -63,3 +66,12 @@ def get_url_info (
         return db_url
     else:
         raise_not_found(request)
+
+def get_admin_info(db_url: models.URL) -> schemas.URLInfo:
+    base_url = URL(get_settings().base_url)
+    admin_endpoint = app.url_path_for (
+        "administration info", secret_key=db_url.secret_key
+    )
+    db_url.url = str(base_url.replace(path=db_url.key))
+    db_url.admin_url = str(base_url.replace(path=admin_endpoint))
+    return db_url
